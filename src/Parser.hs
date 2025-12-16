@@ -145,4 +145,5 @@ p_quote = do
   return $ Quote expr
 
 p_expr :: Parser Expr
-p_expr = p_list <|> p_integer <|> p_string <|> p_quote <|> p_symbol
+p_expr = many p_whitespace
+       >> p_list <|> p_integer <|> p_string <|> p_quote <|> p_symbol
