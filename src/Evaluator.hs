@@ -37,7 +37,7 @@ createBaseEnv = fmap return $ newIORef $ HM.fromList $
                                     Pair (_,b) -> [b]
                                     Quote (List (_:bs)) -> [Quote (List bs)]))
   ,("display", Lambda (\[String s] -> (liftIO $ putStrLn $ T.unpack s) >> return []))
-  ,("values", Lambda (\values -> return values))
+  ,("values", Lambda return)
   ,("apply", Lambda (\[fn, Quote (List args)] -> eval $ List (fn:args)))
   ,("eval", Lambda (\[input] -> case input of
                        Quote x   -> eval x
