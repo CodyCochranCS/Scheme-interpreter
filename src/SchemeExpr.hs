@@ -4,7 +4,6 @@ module SchemeExpr
     , Eval
     ) where
 
-import Control.Monad.Reader (ReaderT)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Cont (ContT)
 import Data.IORef (IORef)
@@ -15,9 +14,9 @@ import Data.Ratio
 
 type Env = [IORef (HM.HashMap T.Text Expr)]
 
-type Eval a = ContT [Expr] (ExceptT T.Text (ReaderT Env IO)) a
--- ContT [Expr] (ExceptT T.Text (ReaderT Env IO)) a
--- (a -> Env -> IO (Either Text [Expr]))  -> Env -> IO (Either Text [Expr])
+type Eval a = ContT [Expr] (ExceptT T.Text IO) a
+-- ContT [Expr] (ExceptT T.Text IO) a
+-- (a -> IO (Either Text [Expr]))  -> IO (Either Text [Expr])
 
 data Expr = Integer Integer
           | Fraction Rational
@@ -31,6 +30,7 @@ data Expr = Integer Integer
           | Pair (Expr, Expr)
           | Quote Expr
           | Lambda ([Expr] -> Eval [Expr])
+          | Environment Env
 
 instance Show Expr where
   show (Integer x) = show x
@@ -48,3 +48,4 @@ instance Show Expr where
                      where go [] = ")"
                            go [x] = mconcat [show x, ")"]
                            go (x:xs) = mconcat [show x, " ", go xs]
+  show (Environment _) = "<Environment>"

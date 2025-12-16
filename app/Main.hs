@@ -2,7 +2,6 @@
 
 module Main (main) where
 
-import Control.Monad.Reader (runReaderT)
 import Control.Monad.Trans.State.Strict (evalStateT)
 import Control.Monad.Cont (evalContT)
 import Control.Monad.Except (runExceptT)
@@ -27,11 +26,10 @@ repl = do
     case evalStateT p_expr (T.pack input) of
       Nothing -> putStrLn "Error: Failed to parse"
       Just expr -> do
-        result <- (`runReaderT` baseEnv) $ runExceptT $ evalContT $ eval expr
+        result <- runExceptT $ evalContT $ eval expr baseEnv
         case result of
           Left err -> putStrLn $ "Error: " ++ T.unpack err
           Right values -> for_ values (putStrLn . show)
-
 
 main :: IO ()
 main = repl
