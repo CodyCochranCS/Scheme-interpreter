@@ -8,7 +8,6 @@ module Evaluator
     ) where
 
 import qualified Data.Text as T
--- import Data.Hashable (Hashable)
 import qualified Data.HashMap.Strict as HM (insert, lookup, fromList, adjust)
 import Data.IORef (newIORef, readIORef, modifyIORef)
 import Control.Monad.Cont (callCC)

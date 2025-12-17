@@ -1,46 +1,116 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
 module Parser
-    ( p_expr
+    ( p_exprs
+    , PromptResult(..)
     ) where
 
-import Control.Monad.Trans.State.Strict
+import Control.Monad.Trans.State.Strict (StateT, get, put)
+import Control.Monad.Trans (lift)
+import Control.Monad (MonadPlus(..))
 import qualified Data.Text as T
 import Control.Applicative
 import Data.Bifunctor
 
 import SchemeExpr
 
-type Parser = StateT T.Text Maybe
+data PromptResult a = Success a
+                    | Failure String
+                    | Incomplete
+  deriving (Show, Eq, Functor)
 
+instance Applicative PromptResult where
+  pure = Success
+  (<*>) f a = case (f, a) of
+    (Success f', Success a') -> Success (f' a')
+    (Failure e, _)           -> Failure e
+    (_, Failure e)           -> Failure e
+    (_, _)                   -> Incomplete
 
+instance Alternative PromptResult where
+  empty = Failure "Alternative.empty failed."
+  p1 <|> p2 = case p1 of
+    Success x  -> Success x
+    Incomplete -> Incomplete
+    Failure _  -> p2
+
+instance MonadPlus PromptResult where
+  mzero = Failure "mzero"
+
+instance Monad PromptResult where
+  return = Success
+  m >>= k = case m of
+    Success a  -> k a
+    Failure e  -> Failure e
+    Incomplete -> Incomplete
+
+type Parser = StateT T.Text PromptResult
+
+p_eof :: Parser ()
+p_eof = do
+  t <- get
+  if T.null t then
+    return ()
+  else
+    lift $ Failure "EOF: Expected end of input."
+
+p_not_eof :: Parser ()
+p_not_eof = do
+  t <- get
+  if T.null t then
+    lift $ Failure "End of input reached"
+  else
+    return ()
 
 oneOf :: T.Text -> Parser Char
-oneOf elements = StateT $ \t ->
+oneOf elements = do
+  t <- get
   case (T.uncons t) of
-    Nothing     -> Nothing
-    Just (x,xs) -> if (T.elem x elements)
-                     then Just (x,xs)
-                     else Nothing
+    Nothing     -> lift Incomplete
+    Just (x,xs) -> if (T.elem x elements) then
+                       put xs >> return x
+                     else
+                       lift $ Failure $ "Parse error. Expected one of: " ++ T.unpack elements
+
+softOneOf :: T.Text -> Parser Char
+softOneOf elements = do
+  t <- get
+  case T.uncons t of
+    Nothing -> lift $ Failure "EOF"
+    Just (x,xs) -> 
+      if T.elem x elements then
+        put xs >> return x
+      else
+        lift $ Failure "No match"
 
 noneOf :: T.Text -> Parser Char
-noneOf elements = StateT $ \t ->
+noneOf elements = do
+  t <- get
   case (T.uncons t) of
-    Nothing     -> Nothing
-    Just (x,xs) -> if (T.elem x elements)
-                     then Nothing
-                     else Just (x,xs)
+    Nothing     -> lift Incomplete
+    Just (x,xs) -> if (T.elem x elements) then
+                     lift $ Failure $ "Parse error. Bad input: " ++ [x]
+                   else
+                     put xs >> return x
 
 maybeOneOf :: T.Text -> Parser (Maybe Char)
-maybeOneOf elements = StateT $ \t ->
+maybeOneOf elements = do
+  t <- get
   case (T.uncons t) of
-    Nothing     -> Just (Nothing, t)
-    Just (x,xs) -> if (T.elem x elements)
-                   then Just (Just x,xs)
-                   else Just (Nothing, t)
+    Nothing     -> lift Incomplete
+    Just (x,xs) -> if (T.elem x elements) then
+                     put xs >> return (Just x)
+                   else do
+                     put t >> return Nothing
 
 p_any :: Parser Char
-p_any = StateT T.uncons
+p_any = do
+  t <- get
+  case (T.uncons t) of
+    Nothing -> lift Incomplete
+    Just (x,xs) -> put xs >> return x
     
 
 allOf :: T.Text -> Parser String
@@ -84,10 +154,12 @@ p_subsequent :: Parser Char
 p_subsequent = p_initial <|> p_digit <|> p_special_subsequent
 
 p_whitespace :: Parser Char
-p_whitespace = oneOf " \n\t"
+p_whitespace = softOneOf " \r\n\t"
 
 p_vertical_line :: Parser Char
 p_vertical_line = oneOf "|"
+
+-- Expr parsers:
 
 p_string :: Parser Expr
 p_string = do
@@ -107,14 +179,6 @@ p_string = do
   oneOf "\""
   return $ String $ T.pack str
 
-
-p_identifier :: Parser T.Text
-p_identifier = do
-  many p_whitespace
-  t <- p_initial
-  ts <- many p_subsequent
-  return $ T.pack (t:ts)
-
 p_integer :: Parser Expr
 p_integer = do
   neg <- maybeOneOf "-+"
@@ -132,9 +196,7 @@ p_symbol = do
 p_list :: Parser Expr
 p_list = do
   oneOf "("
-  exprs <- many $ do
-    many p_whitespace
-    p_expr
+  exprs <- many p_expr
   oneOf ")"
   return $ List exprs
 
@@ -145,5 +207,16 @@ p_quote = do
   return $ Quote expr
 
 p_expr :: Parser Expr
-p_expr = many p_whitespace
-       >> p_list <|> p_integer <|> p_string <|> p_quote <|> p_symbol
+p_expr = do
+  many p_whitespace
+  result <- p_list <|> p_integer <|> p_string <|> p_quote <|> p_symbol
+  many p_whitespace
+  return result
+
+p_exprs :: Parser [Expr]
+p_exprs = do
+  expr <- many $ do
+    p_not_eof
+    p_expr
+  p_eof
+  return expr
