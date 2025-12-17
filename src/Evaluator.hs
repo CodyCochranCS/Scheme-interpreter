@@ -136,6 +136,9 @@ eval (Symbol s) env = do
   case msum $ fmap (HM.lookup s) envs of
     Just val -> return [val]
     Nothing  -> lift $ throwError $ T.pack $ "Unbound variable: " ++ show s
+eval p@(Pair (a,b)) env = case b of
+  List as -> eval (List (a:as)) env
+  _ -> lift $ throwError $ T.pack $ "Cannot evaluate pair: " ++ show p
 eval selfevaluating _ = return [selfevaluating]
 
 extractSingleValue :: [Expr] -> Eval Expr

@@ -54,7 +54,7 @@ p_eof = do
   if T.null t then
     return ()
   else
-    lift $ Failure "EOF: Expected end of input."
+    lift $ Failure $ "EOF: Expected end of input, but still had: " ++ T.unpack t
 
 p_not_eof :: Parser ()
 p_not_eof = do
@@ -104,6 +104,9 @@ maybeOneOf elements = do
                      put xs >> return (Just x)
                    else do
                      put t >> return Nothing
+
+maybeParse :: Parser a -> Parser (Maybe a)
+maybeParse p = (p >>= return . Just) <|> return Nothing
 
 p_any :: Parser Char
 p_any = do
@@ -195,10 +198,28 @@ p_symbol = do
 
 p_list :: Parser Expr
 p_list = do
+  many p_whitespace
   oneOf "("
   exprs <- many p_expr
+  optionalDot <- do
+    maybeParse $ oneOf "."
+    maybeList <- maybeParse p_list
+    return maybeList
   oneOf ")"
-  return $ List exprs
+  many p_whitespace
+  case optionalDot of
+    Nothing          -> return $ List exprs
+    Just (List rest) -> return $ List (exprs ++ rest)
+    _ -> lift $ Failure "Parse error: No list after dot"
+
+p_pair :: Parser Expr
+p_pair = do
+  oneOf "("
+  expr1 <- p_expr
+  oneOf "."
+  expr2 <- p_expr
+  oneOf ")"
+  return $ Pair (expr1, expr2)
 
 p_quote :: Parser Expr
 p_quote = do
@@ -209,7 +230,7 @@ p_quote = do
 p_expr :: Parser Expr
 p_expr = do
   many p_whitespace
-  result <- p_list <|> p_integer <|> p_string <|> p_quote <|> p_symbol
+  result <- p_list <|> p_pair <|> p_integer <|> p_string <|> p_quote <|> p_symbol
   many p_whitespace
   return result
 
