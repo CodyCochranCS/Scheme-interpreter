@@ -203,17 +203,18 @@ p_list = do
   exprs <- many p_expr
   optionalDot <- do
     maybeParse $ oneOf "."
-    maybeList <- maybeParse p_list
-    return maybeList
+    maybeRest <- maybeParse p_expr
+    return maybeRest
   oneOf ")"
   many p_whitespace
   case optionalDot of
     Nothing          -> return $ List exprs
     Just (List rest) -> return $ List (exprs ++ rest)
-    _ -> lift $ Failure "Parse error: No list after dot"
+    Just last -> return $ foldr (\x rest -> Pair (x,rest)) last exprs
 
 p_pair :: Parser Expr
 p_pair = do
+  many p_whitespace
   oneOf "("
   expr1 <- p_expr
   oneOf "."
@@ -230,7 +231,7 @@ p_quote = do
 p_expr :: Parser Expr
 p_expr = do
   many p_whitespace
-  result <- p_list <|> p_pair <|> p_integer <|> p_string <|> p_quote <|> p_symbol
+  result <- p_list <|> p_integer <|> p_string <|> p_quote <|> p_symbol
   many p_whitespace
   return result
 

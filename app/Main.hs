@@ -29,6 +29,7 @@ repl env = fix $ \loop inputBuffer -> do
         case result of
           Left err     -> putStrLn $ "Error: " ++ T.unpack err
           Right values -> for_ values (putStrLn . show)
+      hFlush stdout
       loop T.empty
     Failure msg -> do
       putStrLn $ "Parser Error: " ++ msg

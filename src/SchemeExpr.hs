@@ -43,8 +43,10 @@ instance Show Expr where
   show (Symbol s) = T.unpack s
   show (Quote e) = "'" ++ show e
   show (Lambda _) = "<Lambda_function>"
-  show (Pair (a,b)) = mconcat ["(", show a, " . ", show b, ")"]
-  show (List xs) = "(" ++ go xs
+  show p@(Pair _) = "(" ++ go p
+                    where go (Pair (a,b)) = mconcat [show a, " ", go b]
+                          go end = mconcat [". ", show end, ")"]
+  show (List vals) = "(" ++ go vals
                      where go [] = ")"
                            go [x] = mconcat [show x, ")"]
                            go (x:xs) = mconcat [show x, " ", go xs]

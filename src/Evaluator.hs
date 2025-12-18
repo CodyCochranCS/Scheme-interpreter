@@ -21,46 +21,77 @@ import SchemeExpr
 throwWrongArgs :: Eval [Expr]
 throwWrongArgs = lift $ throwError $ "Incorrect arguments used in function call"
 
+plus [Integer x, Integer y] = return [Integer (x+y)]
+plus _ = throwWrongArgs
+
+minus [Integer x, Integer y] = return [Integer (x-y)]
+minus _ = throwWrongArgs
+
+times [Integer x, Integer y] = return [Integer (x*y)]
+times _ = throwWrongArgs
+
+equal [Integer x, Integer y] = return [Bool (x == y)]
+equal _ = throwWrongArgs
+
+lessorequal [Integer x, Integer y] = return [Bool (x <= y)]
+lessorequal _ = throwWrongArgs
+
+cons [a,b] = return $ case b of
+  Quote (List bs) -> [Quote (List (a:bs))]
+  _ -> [Pair (a,b)]
+cons _ = throwWrongArgs
+
+car [Pair (a,_)] = return [a]
+car [Quote (List (a:_))] = return [a]
+car _ = throwWrongArgs
+
+cdr [Pair (_,b)] = return [b]
+cdr [Quote (List (_:bs))] = return [Quote (List bs)]
+cdr _ = throwWrongArgs
+
+newline [] = (liftIO $ putStrLn "") >> return []
+newline _ = throwWrongArgs
+
+apply [Lambda f, Quote (List args)] = f args
+apply _ = throwWrongArgs
+
+eval' [Quote expr, Environment e] = eval expr e
+eval' _ = throwWrongArgs
+
+display [Quote x] = (liftIO $ putStr $ show x) >> return []
+display [x] = do
+  case x of
+    Pair (a,b) -> do
+      liftIO $ putStr "("
+      display [a]
+      liftIO $ putStr " . "
+      display [b]
+      liftIO $ putStr ")"
+    List [] -> liftIO $ putStr "()"
+    List xs -> do
+      liftIO $ putStr "("
+      traverse (\x -> liftIO (putStr " ") >> display [x]) xs
+      liftIO $ putStr ")"
+    String s -> liftIO $ putStr $ T.unpack s
+    x -> liftIO $ putStr $ show x
+  return []
+display _ = throwWrongArgs
+
 createBaseEnv :: IO Env
 createBaseEnv = fmap return $ newIORef $ HM.fromList $
-  [("+", Lambda (\args -> case args of
-                   [Integer x, Integer y] -> return [Integer (x+y)]
-                   _ -> throwWrongArgs))
-  ,("-", Lambda (\args -> case args of
-                   [Integer x, Integer y] -> return [Integer (x-y)]
-                   _ -> throwWrongArgs))
-  ,("*", Lambda (\args -> case args of
-                   [Integer x, Integer y] -> return [Integer (x*y)]
-                   _ -> throwWrongArgs))
-  ,("=", Lambda (\args -> case args of
-                   [Integer x, Integer y] -> return [Bool (x == y)]
-                   _ -> throwWrongArgs))
-  ,("<=", Lambda (\args -> case args of
-                    [Integer x, Integer y] -> return [Bool (x <= y)]
-                    _ -> throwWrongArgs))
-  ,("cons", Lambda (\args -> case args of
-                      [a,b] -> return $ case b of
-                                       Quote (List bs) -> [Quote (List (a:bs))]
-                                       _ -> [Pair (a,b)]
-                      _ -> throwWrongArgs))
-  ,("car", Lambda (\args -> case args of
-                      [Pair (a,_)] -> return [a]
-                      [Quote (List (a:_))] -> return [a]
-                      _ -> throwWrongArgs))
-  ,("cdr", Lambda (\args -> case args of
-                      [Pair (_,b)] -> return [b]
-                      [Quote (List (_:bs))] -> return [Quote (List bs)]
-                      _ -> throwWrongArgs))
-  ,("display", Lambda (\args -> case args of
-                         [String s] -> (liftIO $ putStrLn $ T.unpack s) >> return []
-                         _ -> throwWrongArgs))
+  [("+", Lambda plus)
+  ,("-", Lambda minus)
+  ,("*", Lambda times)
+  ,("=", Lambda equal)
+  ,("<=", Lambda lessorequal)
+  ,("cons", Lambda cons)
+  ,("car", Lambda car)
+  ,("cdr", Lambda cdr)
+  ,("display", Lambda display)
+  ,("newline", Lambda newline)
   ,("values", Lambda return)
-  ,("apply", Lambda (\args -> case args of
-                        [Lambda f, Quote (List args)] -> f args
-                        _ -> throwWrongArgs))
-  ,("eval", Lambda (\args -> case args of
-                      [Quote expr, Environment e] -> eval expr e
-                      _ -> throwWrongArgs))
+  ,("apply", Lambda apply)
+  ,("eval", Lambda eval')
   ]
 
 eval :: Expr -> Env -> Eval [Expr]
@@ -99,12 +130,17 @@ eval (List (Symbol s:args)) env = case s of
   "lambda" -> case args of
     (params:exprs) -> do
       let make_new_env = liftIO . newIORef . HM.fromList
+          get_symbol (Symbol s) = s
+          get_symbol _ = ""
+      -- Note: zip doesn't verify same length between parameters and arguments
+      -- Note: Change to a type to handle errors better
       make_new_frame <- case params of
-        List ps  -> return (\args -> make_new_env $ zip (map (\x -> case x of
-                                                                      (Symbol s) -> s
-                                                                      _ -> "")
-                                                              ps)
-                                                        args)
+        List ps  -> return (\args -> make_new_env $ zip (map get_symbol ps) args)
+        Pair ps -> return (\args -> 
+          let go (List ps) as = zip (map get_symbol ps) as
+              go (Pair (p1,p2)) (a1:as) = (get_symbol p1, a1) : go p2 as
+              go p lst = [(get_symbol p, List lst)]
+          in make_new_env $ go (Pair ps) args)
         Symbol p -> return (\args -> make_new_env $ [(p, Quote (List args))])
         _ -> lift $ throwError "Syntax error with lambda parameter list"
       return $ return $ Lambda $ \args -> do
