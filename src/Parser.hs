@@ -207,20 +207,7 @@ p_list = do
     return maybeRest
   oneOf ")"
   many p_whitespace
-  case optionalDot of
-    Nothing          -> return $ List exprs
-    Just (List rest) -> return $ List (exprs ++ rest)
-    Just last -> return $ foldr (\x rest -> Pair (x,rest)) last exprs
-
-p_pair :: Parser Expr
-p_pair = do
-  many p_whitespace
-  oneOf "("
-  expr1 <- p_expr
-  oneOf "."
-  expr2 <- p_expr
-  oneOf ")"
-  return $ Pair (expr1, expr2)
+  return $ foldr (:.) (maybe Null id optionalDot) exprs
 
 p_quote :: Parser Expr
 p_quote = do

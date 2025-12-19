@@ -18,6 +18,8 @@ type Eval a = ContT [Expr] (ExceptT T.Text IO) a
 -- ContT [Expr] (ExceptT T.Text IO) a
 -- (a -> IO (Either Text [Expr]))  -> IO (Either Text [Expr])
 
+infixr 5 :.
+
 data Expr = Integer Integer
           | Fraction Rational
           | Complex (Complex Expr)
@@ -26,10 +28,10 @@ data Expr = Integer Integer
           | Char Char
           | String T.Text
           | Symbol T.Text
-          | List [Expr]
-          | Pair (Expr, Expr)
+          | Expr :. Expr
+          | Null
           | Quote Expr
-          | Lambda ([Expr] -> Eval [Expr])
+          | Lambda (Expr -> Eval [Expr])
           | Environment Env
 
 instance Show Expr where
@@ -43,11 +45,15 @@ instance Show Expr where
   show (Symbol s) = T.unpack s
   show (Quote e) = "'" ++ show e
   show (Lambda _) = "<Lambda_function>"
-  show p@(Pair _) = "(" ++ go p
-                    where go (Pair (a,b)) = mconcat [show a, " ", go b]
+  show p@(_ :. _) = "(" ++ go p
+                    where go (a :. Null) = mconcat [show a, ")"]
+                          go (a :. b) = mconcat [show a, " ", go b]
                           go end = mconcat [". ", show end, ")"]
+  {-
   show (List vals) = "(" ++ go vals
                      where go [] = ")"
                            go [x] = mconcat [show x, ")"]
                            go (x:xs) = mconcat [show x, " ", go xs]
+  -}
   show (Environment _) = "<Environment>"
+  show Null = "<<<SHOWING NULL!!!!>>>"

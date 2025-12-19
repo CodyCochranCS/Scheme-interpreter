@@ -21,43 +21,42 @@ import SchemeExpr
 throwWrongArgs :: Eval [Expr]
 throwWrongArgs = lift $ throwError $ "Incorrect arguments used in function call"
 
-plus [Integer x, Integer y] = return [Integer (x+y)]
+plus (Integer x :. Integer y :. Null) = return [Integer (x+y)]
 plus _ = throwWrongArgs
 
-minus [Integer x, Integer y] = return [Integer (x-y)]
+minus (Integer x :. Integer y :. Null) = return [Integer (x-y)]
 minus _ = throwWrongArgs
 
-times [Integer x, Integer y] = return [Integer (x*y)]
+times (Integer x :. Integer y :. Null) = return [Integer (x*y)]
 times _ = throwWrongArgs
 
-equal [Integer x, Integer y] = return [Bool (x == y)]
+equal (Integer x :. Integer y :. Null) = return [Bool (x == y)]
 equal _ = throwWrongArgs
 
-lessorequal [Integer x, Integer y] = return [Bool (x <= y)]
+lessorequal (Integer x :. Integer y :. Null) = return [Bool (x <= y)]
 lessorequal _ = throwWrongArgs
-
-cons [a,b] = return $ case b of
-  Quote (List bs) -> [Quote (List (a:bs))]
-  _ -> [Pair (a,b)]
+{-
+cons (a :. b :. Null) = case b of
+  Quote x -> return [Quote (a :. x)]
+  _ -> return [Quote (a :. b)]
 cons _ = throwWrongArgs
 
-car [Pair (a,_)] = return [a]
-car [Quote (List (a:_))] = return [a]
+car (Quote (a :. _) :. Null) = return [a]
 car _ = throwWrongArgs
 
-cdr [Pair (_,b)] = return [b]
-cdr [Quote (List (_:bs))] = return [Quote (List bs)]
+cdr (Quote (_ :. b) :. Null) = return [b]
 cdr _ = throwWrongArgs
-
-newline [] = (liftIO $ putStrLn "") >> return []
+-}
+newline Null = (liftIO $ putStrLn "") >> return []
 newline _ = throwWrongArgs
-
+{-
 apply [Lambda f, Quote (List args)] = f args
 apply _ = throwWrongArgs
 
 eval' [Quote expr, Environment e] = eval expr e
 eval' _ = throwWrongArgs
-
+-}
+{-
 display [Quote x] = (liftIO $ putStr $ show x) >> return []
 display [x] = do
   case x of
@@ -76,6 +75,7 @@ display [x] = do
     x -> liftIO $ putStr $ show x
   return []
 display _ = throwWrongArgs
+-}
 
 createBaseEnv :: IO Env
 createBaseEnv = fmap return $ newIORef $ HM.fromList $
@@ -84,20 +84,20 @@ createBaseEnv = fmap return $ newIORef $ HM.fromList $
   ,("*", Lambda times)
   ,("=", Lambda equal)
   ,("<=", Lambda lessorequal)
-  ,("cons", Lambda cons)
-  ,("car", Lambda car)
-  ,("cdr", Lambda cdr)
-  ,("display", Lambda display)
+  -- ,("cons", Lambda cons)
+  -- ,("car", Lambda car)
+  -- ,("cdr", Lambda cdr)
+  -- ,("display", Lambda display)
   ,("newline", Lambda newline)
-  ,("values", Lambda return)
-  ,("apply", Lambda apply)
-  ,("eval", Lambda eval')
+  -- ,("values", Lambda return)
+  -- ,("apply", Lambda apply)
+  -- ,("eval", Lambda eval')
   ]
 
 eval :: Expr -> Env -> Eval [Expr]
-eval (List (Symbol s:args)) env = case s of
+eval (Symbol s :. args) env = case s of
   "define" -> case args of
-    [Symbol identifier,expr] -> do
+    (Symbol identifier :. expr :. Null) -> do
       case env of
         (env_ref:_) -> do
           value <- eval expr env >>= extractSingleValue
@@ -106,7 +106,7 @@ eval (List (Symbol s:args)) env = case s of
         _ -> lift $ throwError $ "No environment exists"
     _ -> lift $ throwError $ "Incorrect syntax for \"define\""
   "set!" -> case args of
-    [Symbol identifier,expr] -> do
+    (Symbol identifier :. expr :. Null) -> do
       value <- eval expr env >>= extractSingleValue
       let update_var [] = lift $ throwError $ T.pack $ "Unbound variable: " ++ show identifier
           update_var (env_ref:parent_envs) = do
@@ -118,63 +118,67 @@ eval (List (Symbol s:args)) env = case s of
       return []
     _ -> lift $ throwError "Syntax error with \"set!\""
   "if" -> case args of
-    [test, truebody, falsebody] -> do
+    (test :. truebody :. falsebody :. Null) -> do
       condition <- eval test env >>= extractSingleValue
       case condition of
         Bool False -> eval falsebody env
         _          -> eval truebody env
     _ -> lift $ throwError "Syntax error with \"if\""
   "quote" -> case args of
-    [x] -> return $ [Quote x]
+    (x :. Null) -> return $ [Quote x]
     _ -> lift $ throwError "Syntax error with \"quote\""
   "lambda" -> case args of
-    (params:exprs) -> do
+    (params :. exprs) -> do
       let make_new_env = liftIO . newIORef . HM.fromList
           get_symbol (Symbol s) = s
           get_symbol _ = ""
-      -- Note: zip doesn't verify same length between parameters and arguments
-      -- Note: Change to a type to handle errors better
-      make_new_frame <- case params of
-        List ps  -> return (\args -> make_new_env $ zip (map get_symbol ps) args)
-        Pair ps -> return (\args -> 
-          let go (List ps) as = zip (map get_symbol ps) as
-              go (Pair (p1,p2)) (a1:as) = (get_symbol p1, a1) : go p2 as
-              go p lst = [(get_symbol p, List lst)]
-          in make_new_env $ go (Pair ps) args)
-        Symbol p -> return (\args -> make_new_env $ [(p, Quote (List args))])
-        _ -> lift $ throwError "Syntax error with lambda parameter list"
+          make_new_frame = case params of
+            ps@(_ :. _) -> let go Null Null = Just []
+                               go (p1 :. ps) (a1 :. as) = (:) <$> Just (get_symbol p1, a1) <*> go ps as
+                               go _ _ = Nothing
+                           in go ps
+            Symbol p -> (\args -> Just [(p, Quote args)])
+            _ -> const Nothing
       return $ return $ Lambda $ \args -> do
-        new_frame <- make_new_frame args
-        let new_env = new_frame:env
-            go [] = return []
-            go [final_expr] = eval final_expr new_env
-            go (e:es) = eval e new_env >> go es
-        go exprs
+        case make_new_frame args of
+          Nothing -> lift $ throwError "Error: wrong arguments with lambda"
+          Just new_frame -> do
+            local_env <- make_new_env new_frame
+            let new_env = local_env:env
+                go Null = return []
+                go (final_expr :. Null) = eval final_expr new_env
+                go (e :. es) = eval e new_env >> go es
+            go exprs
     _ -> lift $ throwError "Syntax error with \"lambda\""
   "call/cc" -> case args of
-    [fn] -> callCC $ \k -> (`eval` env) $ List $ fn : [Lambda k]
+    (fn :. Null) -> callCC $ \k -> do
+      let pairstolist Null = return []
+          pairstolist (a :. b) = (a:) <$> pairstolist b
+          pairstolist _ = lift $ throwError "Wrong number of arguments for continuation"
+      (`eval` env) $ (fn :. Lambda (\pairs -> pairstolist pairs >>= k) :. Null)
     _ -> lift $ throwError "Wrong number of arguments for \"call/cc\""
   "get-environment" -> case args of
-    [] -> return $ [Environment env]
-    _ -> lift $ throwError $ "Incorrect number of arguments for get-environment"
+    Null -> return $ [Environment env]
+    _ -> lift $ throwError "Incorrect number of arguments for get-environment"
   _ -> do
     function <- eval (Symbol s) env >>= extractSingleValue
-    (`eval` env) $ List (function:args)
-eval (List []) _ = lift $ throwError $ "Cannot evaluate empty function"
-eval (List function) env = do
-  result <- traverse (\e -> eval e env >>= extractSingleValue) function
-  case result of
-    (Lambda f:args) -> f args
-    _  -> lift $ throwError $ "Not a function"
+    case function of
+      (Lambda f) -> do
+        let eval_args Null = return Null
+            eval_args p@(a :. as) = do
+              val <- eval a env >>= extractSingleValue
+              rest <- eval_args as
+              return (val :. rest)
+            eval_args _ = lift $ throwError "Error: Function not called with list"
+        args' <- eval_args args
+        f args'
+      _ -> lift $ throwError "Error: Not a function"
 eval x@(Quote _) _ = return [x]
 eval (Symbol s) env = do
   envs <- liftIO $ (traverse readIORef) env
   case msum $ fmap (HM.lookup s) envs of
     Just val -> return [val]
     Nothing  -> lift $ throwError $ T.pack $ "Unbound variable: " ++ show s
-eval p@(Pair (a,b)) env = case b of
-  List as -> eval (List (a:as)) env
-  _ -> lift $ throwError $ T.pack $ "Cannot evaluate pair: " ++ show p
 eval selfevaluating _ = return [selfevaluating]
 
 extractSingleValue :: [Expr] -> Eval Expr
