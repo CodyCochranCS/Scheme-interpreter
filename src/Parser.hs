@@ -4,11 +4,14 @@
 
 module Parser
     ( p_exprs
+    , p_expr
     , PromptResult(..)
+    , PromptResultT(..)
     ) where
 
 import Control.Monad.Trans.State.Strict (StateT, get, put)
 import Control.Monad.Trans (lift)
+import Control.Monad.Trans.Class (MonadTrans(..))
 import Control.Monad (MonadPlus(..))
 import qualified Data.Text as T
 import Control.Applicative
@@ -20,6 +23,10 @@ data PromptResult a = Success a
                     | Failure String
                     | Incomplete
   deriving (Show, Eq, Functor)
+
+newtype PromptResultT m a = PromptResultT {
+    runPromptResultT :: m (PromptResult a)
+}
 
 instance Applicative PromptResult where
   pure = Success
@@ -46,7 +53,49 @@ instance Monad PromptResult where
     Failure e  -> Failure e
     Incomplete -> Incomplete
 
-type Parser = StateT T.Text PromptResult
+instance Monad m => Monad (PromptResultT m) where
+    return = PromptResultT . return . Success
+    m >>= f = PromptResultT $ do
+        result <- runPromptResultT m
+        case result of
+            Success a    -> runPromptResultT (f a)
+            Failure err  -> return $ Failure err
+            Incomplete   -> return Incomplete
+
+instance Monad m => Functor (PromptResultT m) where
+    fmap f m = m >>= return . f
+
+instance Monad m => Applicative (PromptResultT m) where
+    pure = return
+    a <*> b = do
+        a' <- a
+        b' <- b
+        return (a' b')
+
+instance Monad m => Alternative (PromptResultT m) where
+    empty = PromptResultT $ return $ Failure "Alternative.empty failed."
+    
+    p1 <|> p2 = PromptResultT $ do
+        res1 <- runPromptResultT p1
+        case res1 of
+            Success x  -> return $ Success x
+            Incomplete -> return Incomplete
+            Failure _  -> runPromptResultT p2
+
+instance Monad m => MonadPlus (PromptResultT m) where
+    mzero = empty
+    mplus = (<|>)
+
+instance MonadTrans PromptResultT where
+    lift m = PromptResultT $ m >>= return . Success
+
+type Parser = StateT T.Text (PromptResultT IO)
+
+throwParseError :: String -> Parser a
+throwParseError err = lift $ PromptResultT $ return $ Failure err
+
+throwIncomplete :: Parser a
+throwIncomplete = lift $ PromptResultT $ return Incomplete
 
 p_eof :: Parser ()
 p_eof = do
@@ -54,13 +103,13 @@ p_eof = do
   if T.null t then
     return ()
   else
-    lift $ Failure $ "EOF: Expected end of input, but still had: " ++ T.unpack t
+    throwParseError $ "EOF: Expected end of input, but still had: " ++ T.unpack t
 
 p_not_eof :: Parser ()
 p_not_eof = do
   t <- get
   if T.null t then
-    lift $ Failure "End of input reached"
+    throwParseError "End of input reached"
   else
     return ()
 
@@ -68,30 +117,30 @@ oneOf :: T.Text -> Parser Char
 oneOf elements = do
   t <- get
   case (T.uncons t) of
-    Nothing     -> lift Incomplete
+    Nothing     -> throwIncomplete
     Just (x,xs) -> if (T.elem x elements) then
                        put xs >> return x
                      else
-                       lift $ Failure $ "Parse error. Expected one of: " ++ T.unpack elements
+                       throwParseError $ "Parse error. Expected one of: " ++ T.unpack elements
 
 softOneOf :: T.Text -> Parser Char
 softOneOf elements = do
   t <- get
   case T.uncons t of
-    Nothing -> lift $ Failure "EOF"
+    Nothing -> throwParseError "EOF"
     Just (x,xs) -> 
       if T.elem x elements then
         put xs >> return x
       else
-        lift $ Failure "No match"
+        throwParseError "No match"
 
 noneOf :: T.Text -> Parser Char
 noneOf elements = do
   t <- get
   case (T.uncons t) of
-    Nothing     -> lift Incomplete
+    Nothing     -> throwIncomplete
     Just (x,xs) -> if (T.elem x elements) then
-                     lift $ Failure $ "Parse error. Bad input: " ++ [x]
+                     throwParseError $ "Parse error. Bad input: " ++ [x]
                    else
                      put xs >> return x
 
@@ -99,7 +148,7 @@ maybeOneOf :: T.Text -> Parser (Maybe Char)
 maybeOneOf elements = do
   t <- get
   case (T.uncons t) of
-    Nothing     -> lift Incomplete
+    Nothing     -> throwIncomplete
     Just (x,xs) -> if (T.elem x elements) then
                      put xs >> return (Just x)
                    else do
@@ -112,7 +161,7 @@ p_any :: Parser Char
 p_any = do
   t <- get
   case (T.uncons t) of
-    Nothing -> lift Incomplete
+    Nothing -> throwIncomplete
     Just (x,xs) -> put xs >> return x
     
 
@@ -213,7 +262,8 @@ p_quote :: Parser Expr
 p_quote = do
   oneOf "'"
   expr <- p_expr
-  return $ Quote expr
+  -- return $ Quote expr
+  return $ (Symbol "quote" :. expr :. Null)
 
 p_expr :: Parser Expr
 p_expr = do

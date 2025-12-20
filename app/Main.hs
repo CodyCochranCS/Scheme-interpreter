@@ -22,13 +22,18 @@ repl env = fix $ \loop inputBuffer -> do
   hFlush stdout
   input <- getLine
   let accumulatedInput = T.append inputBuffer $ T.pack (input ++ "\n")
-  case runStateT p_exprs accumulatedInput of
+  result <- runPromptResultT $ runStateT p_exprs accumulatedInput
+  case result of
     Success (exprs, remaining) -> do
       for_ exprs $ \expr -> do
-        result <- runExceptT $ evalContT $ eval expr env
+        let evaluated = do
+              vals <- eval expr env
+              let writeln args = write args >> newline Null
+              for_each (Lambda writeln :. vals :. Null)
+        result <- runExceptT $ evalContT $ evaluated
         case result of
-          Left err     -> putStrLn $ "Error: " ++ T.unpack err
-          Right values -> for_ values (putStrLn . show)
+          Left err -> putStrLn $ "Error: " ++ T.unpack err
+          Right _  -> return ()
       hFlush stdout
       loop T.empty
     Failure msg -> do
