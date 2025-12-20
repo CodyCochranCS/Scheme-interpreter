@@ -42,7 +42,9 @@ equal _ = throwWrongArgs
 lessorequal (Integer x :. Integer y :. Null) = return (Bool (x <= y) :. Null)
 lessorequal _ = throwWrongArgs
 
-cons (a :. b :. Null) = return ((a :. b) :. Null)
+cons (a :. b :. Null) = do
+  ref <- liftIO $ newIORef (a,b)
+  return (Pair ref :. Null)
 cons _ = throwWrongArgs
 
 car :: Expr -> Eval Expr
@@ -72,6 +74,24 @@ cdr (expr :. Null) = cdr' expr
           _ -> lift $ throwError "Called car on non-pair"
         cdr' _ = lift $ throwError "Called car on non-pair"
 cdr _ = throwWrongArgs
+
+set_car :: Expr -> Eval Expr
+set_car (expr :. val :. Null) = case expr of
+  Pair ref -> do
+    liftIO $ modifyIORef ref (\(a,b) -> (val,b))
+    return Null
+  (_ :. _) -> lift $ throwError "Error: Attempt to mutate immutable pair"
+  _ -> lift $ throwError "Error: Attempt to mutate non-pair"
+set_car _ = throwWrongArgs
+
+set_cdr :: Expr -> Eval Expr
+set_cdr (expr :. val :. Null) = case expr of
+  Pair ref -> do
+    liftIO $ modifyIORef ref (\(a,b) -> (a,val))
+    return Null
+  (_ :. _) -> lift $ throwError "Error: Attempt to mutate immutable pair"
+  _ -> lift $ throwError "Error: Attempt to mutate non-pair"
+set_cdr _ = throwWrongArgs
 
 newline Null = (liftIO $ putStrLn "") >> return Null
 newline _ = throwWrongArgs
@@ -181,6 +201,8 @@ createBaseEnv = fmap return $ newIORef $ HM.fromList $
   ,("cons", Lambda cons)
   ,("car", Lambda car)
   ,("cdr", Lambda cdr)
+  ,("set-car!", Lambda set_car)
+  ,("set-cdr!", Lambda set_cdr)
   -- ,("display", Lambda display)
   ,("newline", Lambda newline)
   ,("values", Lambda return)
@@ -212,19 +234,29 @@ eval (Symbol s :. args) env = case s of
     (Symbol identifier :. expr :. Null) -> do
       case env of
         (env_ref:_) -> do
-          value <- eval expr env >>= extractSingleValue
-          liftIO $ modifyIORef env_ref (HM.insert identifier value)
-          return Null
+          frame <- liftIO $ readIORef env_ref
+          case HM.lookup identifier frame of
+            Just _ -> lift $ throwError $ "Defining a variable that already exists"
+            Nothing -> do
+              value <- eval expr env >>= extractSingleValue
+              mutable_value <- liftIO $ case value of
+                (_ :. _) -> listToPairs value
+                _ -> return value
+              liftIO $ modifyIORef env_ref (HM.insert identifier mutable_value)
+              return Null
         _ -> lift $ throwError $ "No environment exists"
     _ -> lift $ throwError $ "Incorrect syntax for \"define\""
   "set!" -> case args of
     (Symbol identifier :. expr :. Null) -> do
       value <- eval expr env >>= extractSingleValue
+      mutable_value <- liftIO $ case value of
+        (_ :. _) -> listToPairs value
+        _ -> return value
       let update_var [] = lift $ throwError $ T.pack $ "Unbound variable: " ++ show identifier
           update_var (env_ref:parent_envs) = do
             env <- liftIO $ readIORef env_ref
             case HM.lookup identifier env of
-              Just _ -> liftIO $ modifyIORef env_ref (HM.adjust (const value) identifier)
+              Just _ -> liftIO $ modifyIORef env_ref (HM.adjust (const mutable_value) identifier)
               Nothing -> update_var parent_envs
       update_var env
       return Null
