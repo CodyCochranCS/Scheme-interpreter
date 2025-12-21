@@ -96,10 +96,10 @@ set_cdr _ = throwWrongArgs
 newline Null = (liftIO $ putStrLn "") >> return Null
 newline _ = throwWrongArgs
 
-apply (Lambda f :. Quote args)= f args
+apply (Lambda f :. args :. Null) = f args
 apply _ = throwWrongArgs
 
-eval' (Quote expr :. Environment e :. Null) = eval expr e
+eval' (expr :. Environment e :. Null) = eval expr e
 eval' _ = throwWrongArgs
 
 -- Note: change this later to be variadic
