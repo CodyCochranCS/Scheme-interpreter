@@ -55,6 +55,7 @@ executables:
     - mtl
     - text
     - transformers
+    - unordered-containers
 
 tests:
   Scheme-interpreter-test:

@@ -8,12 +8,12 @@ module Evaluator
     , for_each
     , write
     , newline
-    , sread
+    -- , sread
     ) where
 
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM (insert, lookup, fromList, adjust)
-import Data.IORef (newIORef, readIORef, modifyIORef)
+import Data.IORef (newIORef, readIORef, modifyIORef, writeIORef)
 import Control.Monad.Cont (callCC)
 import Control.Monad.Except (throwError) --  catchError
 import Control.Monad (msum)
@@ -112,6 +112,7 @@ for_each (Lambda f :. lst :. Null) = do
     _ -> lift $ throwError "Unexpected end of list in for-each"
 for_each _ = throwWrongArgs
 
+{-
 sread :: Expr -> Eval Expr
 sread Null = sread' T.empty
   where sread' :: T.Text -> Eval Expr
@@ -128,6 +129,7 @@ sread Null = sread' T.empty
               return Null
             Incomplete -> sread' accumulatedInput
 sread _ = throwWrongArgs
+-}
 
 recursive_write :: (Expr -> String) -> Expr -> Eval Expr
 recursive_write style expr = case expr of
@@ -177,26 +179,34 @@ display :: Expr -> Eval Expr
 display (expr :. Null) = recursive_write displayval expr
 display _ = throwWrongArgs
 
-createBaseEnv :: IO Env
-createBaseEnv = fmap return $ newIORef $ HM.fromList $
-  [("+", Lambda plus)
-  ,("-", Lambda minus)
-  ,("*", Lambda times)
-  ,("=", Lambda equal)
-  ,("<=", Lambda lessorequal)
-  ,("cons", Lambda cons)
-  ,("car", Lambda car)
-  ,("cdr", Lambda cdr)
-  ,("set-car!", Lambda set_car)
-  ,("set-cdr!", Lambda set_cdr)
-  ,("display", Lambda display)
-  ,("newline", Lambda newline)
-  ,("values", Lambda return)
-  ,("apply", Lambda apply)
-  ,("eval", Lambda eval')
-  ,("write", Lambda write)
-  ,("read", Lambda sread)
-  ]
+createBaseEnv :: SymbolTable -> IO Env
+createBaseEnv symbolTable = do
+  let assign_symbol (str,lambda) = do
+        (table,counter) <- readIORef symbolTable
+        let newTable = HM.insert str counter table
+        writeIORef symbolTable (newTable, counter+1)
+        return (str, lambda)
+  environment <- traverse assign_symbol 
+    [("+", Lambda plus)
+    ,("-", Lambda minus)
+    ,("*", Lambda times)
+    ,("=", Lambda equal)
+    ,("<=", Lambda lessorequal)
+    ,("cons", Lambda cons)
+    ,("car", Lambda car)
+    ,("cdr", Lambda cdr)
+    ,("set-car!", Lambda set_car)
+    ,("set-cdr!", Lambda set_cdr)
+    ,("display", Lambda display)
+    ,("newline", Lambda newline)
+    ,("values", Lambda return)
+    ,("apply", Lambda apply)
+    ,("eval", Lambda eval')
+    ,("write", Lambda write)
+    -- ,("read", Lambda sread)
+    ]
+  fmap return $ newIORef $ HM.fromList $ environment
+  
 
 listToPairs :: Expr -> IO Expr
 listToPairs (a :. b) = do
@@ -215,9 +225,9 @@ pairsToList (Pair ref) = do
 pairsToList x = return x
 
 eval :: Expr -> Env -> Eval Expr
-eval (Symbol s :. args) env = case s of
+eval (Symbol (s, symbolid) :. args) env = case s of
   "define" -> case args of
-    (Symbol identifier :. expr :. Null) -> do
+    (Symbol (identifier,_) :. expr :. Null) -> do
       case env of
         (env_ref:_) -> do
           frame <- liftIO $ readIORef env_ref
@@ -233,7 +243,7 @@ eval (Symbol s :. args) env = case s of
         _ -> lift $ throwError $ "No environment exists"
     _ -> lift $ throwError $ "Incorrect syntax for \"define\""
   "set!" -> case args of
-    (Symbol identifier :. expr :. Null) -> do
+    (Symbol (identifier,_) :. expr :. Null) -> do
       value <- eval expr env >>= extractSingleValue
       mutable_value <- liftIO $ case value of
         (_ :. _) -> listToPairs value
@@ -261,14 +271,14 @@ eval (Symbol s :. args) env = case s of
   "lambda" -> case args of
     (params :. exprs) -> do
       let make_new_env = liftIO . newIORef . HM.fromList
-          get_symbol (Symbol s) = s
+          get_symbol (Symbol (s,_)) = s
           get_symbol _ = ""
           make_new_frame = case params of
             ps@(_ :. _) -> let go Null Null = Just []
                                go (p1 :. ps) (a1 :. as) = Just ((get_symbol p1, a1):) <*> go ps as
                                go _ _ = Nothing
                            in go ps
-            Symbol p -> (\args -> Just [(p, Quote args)])
+            Symbol (p,_) -> (\args -> Just [(p, Quote args)])
             _ -> const Nothing
           f = Lambda $ \args -> case make_new_frame args of
                 Nothing -> lift $ throwError "Error: wrong arguments with lambda"
@@ -292,7 +302,7 @@ eval (Symbol s :. args) env = case s of
     Null -> return $ (Environment env :. Null)
     _ -> lift $ throwError "Incorrect number of arguments for get-environment"
   _ -> do
-    f <- eval (Symbol s) env >>= extractSingleValue
+    f <- eval (Symbol (s,symbolid)) env >>= extractSingleValue
     eval (f :. args) env
 eval (Lambda f :. args) env = do
   let eval_args Null = return Null
@@ -305,7 +315,7 @@ eval (Lambda f :. args) env = do
   f args'
 eval (a :. _) _ = lift $ throwError $ T.pack $ "Not a function: " ++ show a
 eval x@(Quote _) _ = return (x :. Null)
-eval (Symbol s) env = do
+eval (Symbol (s,symbolid)) env = do
   envs <- liftIO $ (traverse readIORef) env
   case msum $ fmap (HM.lookup s) envs of
     Just val -> return (val :. Null)

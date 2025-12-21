@@ -1,6 +1,7 @@
 module SchemeExpr
     ( Expr(..)
     , Env
+    , SymbolTable
     , Eval
     ) where
 
@@ -13,6 +14,7 @@ import Data.Complex
 import Data.Ratio
 
 type Env = [IORef (HM.HashMap T.Text Expr)]
+type SymbolTable = IORef ((HM.HashMap T.Text Int), Int)
 
 type Eval a = ContT Expr (ExceptT T.Text IO) a
 -- ContT [Expr] (ExceptT T.Text IO) a
@@ -27,7 +29,7 @@ data Expr = Integer Integer
           | Bool Bool
           | Char Char
           | String T.Text
-          | Symbol T.Text
+          | Symbol (T.Text, Int)
           | Expr :. Expr
           | Pair (IORef (Expr, Expr))
           | Null
@@ -43,7 +45,7 @@ instance Show Expr where
   show (Bool False) = "#f"
   show (Char c) = "#\\" ++ [c]
   show (String s) = show s
-  show (Symbol s) = T.unpack s
+  show (Symbol (s,_)) = T.unpack s
   show (Quote e) = "'" ++ show e
   show (Lambda _) = "<Lambda_function>"
   show p@(_ :. _) = "(" ++ go p

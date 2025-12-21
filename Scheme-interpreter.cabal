@@ -59,6 +59,7 @@ executable Scheme-interpreter-exe
     , mtl
     , text
     , transformers
+    , unordered-containers
   default-language: Haskell2010
 
 test-suite Scheme-interpreter-test

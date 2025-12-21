@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
 module Parser
@@ -9,11 +10,16 @@ module Parser
     , PromptResultT(..)
     ) where
 
-import Control.Monad.Trans.State.Strict (StateT, get, put)
+-- import Control.Monad.Trans.State.Strict (StateT, get, put)
+-- import Control.Monad.Reader (ReaderT)
+import Control.Monad.RWS.Strict (RWST, runRWST, put, get, ask)
 import Control.Monad.Trans (lift)
 import Control.Monad.Trans.Class (MonadTrans(..))
 import Control.Monad (MonadPlus(..))
+import Control.Monad.IO.Class (MonadIO, liftIO)
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
+import Data.IORef
 import Control.Applicative
 import Data.Bifunctor
 
@@ -89,7 +95,10 @@ instance Monad m => MonadPlus (PromptResultT m) where
 instance MonadTrans PromptResultT where
     lift m = PromptResultT $ m >>= return . Success
 
-type Parser = StateT T.Text (PromptResultT IO)
+instance MonadIO (PromptResultT IO) where
+    liftIO = lift . liftIO
+
+type Parser = RWST SymbolTable () T.Text (PromptResultT IO)
 
 throwParseError :: String -> Parser a
 throwParseError err = lift $ PromptResultT $ return $ Failure err
@@ -243,7 +252,14 @@ p_symbol :: Parser Expr
 p_symbol = do
   t <- p_initial
   ts <- many p_subsequent
-  return $ Symbol $ T.pack (t:ts)
+  let symbol = T.pack (t:ts)
+  ref <- ask
+  (symbolTable, counter) <- liftIO $ readIORef ref
+  case HM.lookup symbol symbolTable of
+    Just n  -> return $ Symbol (symbol, n)
+    Nothing -> do
+      liftIO $ writeIORef ref ((HM.insert symbol counter symbolTable), counter+1)
+      return $ Symbol (symbol, counter)
 
 p_list :: Parser Expr
 p_list = do
@@ -262,8 +278,11 @@ p_quote :: Parser Expr
 p_quote = do
   oneOf "'"
   expr <- p_expr
-  -- return $ Quote expr
-  return $ (Symbol "quote" :. expr :. Null)
+  ref <- ask
+  (symbolTable, counter) <- liftIO $ readIORef ref
+  case HM.lookup "quote" symbolTable of
+    Just n  -> return $ (Symbol ("quote", n) :. expr :. Null)
+    Nothing -> throwParseError "Unable to find \"quote\" symbol"
 
 p_expr :: Parser Expr
 p_expr = do
