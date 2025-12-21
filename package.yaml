@@ -41,6 +41,7 @@ library:
   - text
   - unordered-containers
   - hashable
+  - containers
 
 executables:
   Scheme-interpreter-exe:

@@ -10,10 +10,12 @@ import Control.Monad.Cont (ContT)
 import Data.IORef (IORef)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM (HashMap)
+import qualified Data.IntMap.Strict as IM
 import Data.Complex
 import Data.Ratio
 
-type Env = [IORef (HM.HashMap T.Text Expr)]
+-- type Env = [IORef (HM.HashMap T.Text Expr)]
+type Env = [IORef (IM.IntMap Expr)]
 type SymbolTable = IORef ((HM.HashMap T.Text Int), Int)
 
 type Eval a = ContT Expr (ExceptT T.Text IO) a

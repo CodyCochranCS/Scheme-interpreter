@@ -13,6 +13,7 @@ module Evaluator
 
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM (insert, lookup, fromList, adjust)
+import qualified Data.IntMap.Strict as IM
 import Data.IORef (newIORef, readIORef, modifyIORef, writeIORef)
 import Control.Monad.Cont (callCC)
 import Control.Monad.Except (throwError) --  catchError
@@ -185,7 +186,7 @@ createBaseEnv symbolTable = do
         (table,counter) <- readIORef symbolTable
         let newTable = HM.insert str counter table
         writeIORef symbolTable (newTable, counter+1)
-        return (str, lambda)
+        return (counter, lambda)
   environment <- traverse assign_symbol 
     [("+", Lambda plus)
     ,("-", Lambda minus)
@@ -205,7 +206,7 @@ createBaseEnv symbolTable = do
     ,("write", Lambda write)
     -- ,("read", Lambda sread)
     ]
-  fmap return $ newIORef $ HM.fromList $ environment
+  fmap return $ newIORef $ IM.fromList $ environment
   
 
 listToPairs :: Expr -> IO Expr
@@ -227,32 +228,32 @@ pairsToList x = return x
 eval :: Expr -> Env -> Eval Expr
 eval (Symbol (s, symbolid) :. args) env = case s of
   "define" -> case args of
-    (Symbol (identifier,_) :. expr :. Null) -> do
+    (Symbol (_, identifier) :. expr :. Null) -> do
       case env of
         (env_ref:_) -> do
           frame <- liftIO $ readIORef env_ref
-          case HM.lookup identifier frame of
+          case IM.lookup identifier frame of
             Just _ -> lift $ throwError $ "Defining a variable that already exists"
             Nothing -> do
               value <- eval expr env >>= extractSingleValue
               mutable_value <- liftIO $ case value of
                 (_ :. _) -> listToPairs value
                 _ -> return value
-              liftIO $ modifyIORef env_ref (HM.insert identifier mutable_value)
+              liftIO $ modifyIORef env_ref (IM.insert identifier mutable_value)
               return Null
         _ -> lift $ throwError $ "No environment exists"
     _ -> lift $ throwError $ "Incorrect syntax for \"define\""
   "set!" -> case args of
-    (Symbol (identifier,_) :. expr :. Null) -> do
+    (Symbol (sym, identifier) :. expr :. Null) -> do
       value <- eval expr env >>= extractSingleValue
       mutable_value <- liftIO $ case value of
         (_ :. _) -> listToPairs value
         _ -> return value
-      let update_var [] = lift $ throwError $ T.pack $ "Unbound variable: " ++ show identifier
+      let update_var [] = lift $ throwError $ T.pack $ "Unbound variable: " ++ show sym
           update_var (env_ref:parent_envs) = do
             env <- liftIO $ readIORef env_ref
-            case HM.lookup identifier env of
-              Just _ -> liftIO $ modifyIORef env_ref (HM.adjust (const mutable_value) identifier)
+            case IM.lookup identifier env of
+              Just _ -> liftIO $ modifyIORef env_ref (IM.adjust (const mutable_value) identifier)
               Nothing -> update_var parent_envs
       update_var env
       return Null
@@ -270,15 +271,15 @@ eval (Symbol (s, symbolid) :. args) env = case s of
     _ -> lift $ throwError "Syntax error with \"quote\""
   "lambda" -> case args of
     (params :. exprs) -> do
-      let make_new_env = liftIO . newIORef . HM.fromList
-          get_symbol (Symbol (s,_)) = s
-          get_symbol _ = ""
+      let make_new_env = liftIO . newIORef . IM.fromList
+          get_symbol (Symbol (_,n)) = n
+          get_symbol _ = -1 -- Todo: return an error if invalid symbol
           make_new_frame = case params of
             ps@(_ :. _) -> let go Null Null = Just []
                                go (p1 :. ps) (a1 :. as) = Just ((get_symbol p1, a1):) <*> go ps as
                                go _ _ = Nothing
                            in go ps
-            Symbol (p,_) -> (\args -> Just [(p, Quote args)])
+            Symbol (_,p) -> (\args -> Just [(p, Quote args)])
             _ -> const Nothing
           f = Lambda $ \args -> case make_new_frame args of
                 Nothing -> lift $ throwError "Error: wrong arguments with lambda"
@@ -317,7 +318,7 @@ eval (a :. _) _ = lift $ throwError $ T.pack $ "Not a function: " ++ show a
 eval x@(Quote _) _ = return (x :. Null)
 eval (Symbol (s,symbolid)) env = do
   envs <- liftIO $ (traverse readIORef) env
-  case msum $ fmap (HM.lookup s) envs of
+  case msum $ fmap (IM.lookup symbolid) envs of
     Just val -> return (val :. Null)
     Nothing  -> lift $ throwError $ T.pack $ "Unbound variable: " ++ show s
 eval selfevaluating _ = return (selfevaluating :. Null)
