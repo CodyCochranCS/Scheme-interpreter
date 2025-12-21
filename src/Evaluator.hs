@@ -112,7 +112,6 @@ for_each (Lambda f :. lst :. Null) = do
     _ -> lift $ throwError "Unexpected end of list in for-each"
 for_each _ = throwWrongArgs
 
--- requires environment atm
 sread :: Expr -> Eval Expr
 sread Null = sread' T.empty
   where sread' :: T.Text -> Eval Expr
@@ -128,68 +127,55 @@ sread Null = sread' T.empty
               liftIO $ putStrLn $ "Parser Error: " ++ msg
               return Null
             Incomplete -> sread' accumulatedInput
--- sread _ = throwWrongArgs
-sread _ = lift $ throwError $ "wrong args in read"
+sread _ = throwWrongArgs
 
-write :: Expr -> Eval Expr
-write (expr :. Null) = write' expr
+recursive_write :: (Expr -> String) -> Expr -> Eval Expr
+recursive_write style expr = case expr of
+  (a :. b) -> do
+    liftIO $ putStr "("
+    recursive_write style a
+    writerest b
+  (Pair ref) -> do
+    (a,b) <- liftIO $ readIORef ref
+    liftIO $ putStr "("
+    recursive_write style a
+    writerest b
+    -- add other mutable types here
+  (Quote x) -> do
+    liftIO $ putStr "'"
+    recursive_write style x
+    return Null
+  _ -> do
+    liftIO $ putStr $ style expr
+    return Null
   where writerest :: Expr -> Eval Expr
         writerest rest = case rest of
           Null -> liftIO $ putStr ")" >> return Null
           (a :. b) -> do
             liftIO $ putStr " "
-            write' a
+            recursive_write style a
             writerest b
           Pair ref -> do
             (a,b) <- liftIO $ readIORef ref
             liftIO $ putStr " "
-            write' a
+            recursive_write style a
             writerest b
           _ -> do
             liftIO $ putStr " . "
-            write' rest
+            recursive_write style rest
             liftIO $ putStr ")"
             return Null
-        write' :: Expr -> Eval Expr
-        write' (a :. b) = do
-          liftIO $ putStr "("
-          write' a
-          writerest b
-        write' (Pair ref) = do
-          (a,b) <- liftIO $ readIORef ref
-          liftIO $ putStr "("
-          write' a
-          writerest b
-          -- add other mutable types here
-        write' (Quote x) = do
-          liftIO $ putStr "'"
-          write' x
-          return Null
-        write' expr = do
-          liftIO $ putStr $ show expr
-          return Null
-write _ = lift $ throwError $ "wrong args in write"
 
-{-
-display [Quote x] = (liftIO $ putStr $ show x) >> return []
-display [x] = do
-  case x of
-    Pair (a,b) -> do
-      liftIO $ putStr "("
-      display [a]
-      liftIO $ putStr " . "
-      display [b]
-      liftIO $ putStr ")"
-    List [] -> liftIO $ putStr "()"
-    List xs -> do
-      liftIO $ putStr "("
-      traverse (\x -> liftIO (putStr " ") >> display [x]) xs
-      liftIO $ putStr ")"
-    String s -> liftIO $ putStr $ T.unpack s
-    x -> liftIO $ putStr $ show x
-  return []
+displayval (String s) = T.unpack s
+displayval x = show x
+
+write :: Expr -> Eval Expr
+write (expr :. Null) = recursive_write show expr
+write _ = throwWrongArgs
+
+display :: Expr -> Eval Expr
+display (expr :. Null) = recursive_write displayval expr
 display _ = throwWrongArgs
--}
 
 createBaseEnv :: IO Env
 createBaseEnv = fmap return $ newIORef $ HM.fromList $
@@ -203,7 +189,7 @@ createBaseEnv = fmap return $ newIORef $ HM.fromList $
   ,("cdr", Lambda cdr)
   ,("set-car!", Lambda set_car)
   ,("set-cdr!", Lambda set_cdr)
-  -- ,("display", Lambda display)
+  ,("display", Lambda display)
   ,("newline", Lambda newline)
   ,("values", Lambda return)
   ,("apply", Lambda apply)
@@ -279,7 +265,7 @@ eval (Symbol s :. args) env = case s of
           get_symbol _ = ""
           make_new_frame = case params of
             ps@(_ :. _) -> let go Null Null = Just []
-                               go (p1 :. ps) (a1 :. as) = (:) <$> Just (get_symbol p1, a1) <*> go ps as
+                               go (p1 :. ps) (a1 :. as) = Just ((get_symbol p1, a1):) <*> go ps as
                                go _ _ = Nothing
                            in go ps
             Symbol p -> (\args -> Just [(p, Quote args)])
@@ -296,25 +282,28 @@ eval (Symbol s :. args) env = case s of
       return (f :. Null)
     _ -> lift $ throwError "Syntax error with \"lambda\""
   "call/cc" -> case args of
-    (fn :. Null) -> callCC $ \k -> (`eval` env) $ (fn :. Lambda k :. Null)
+    (function :. Null) -> do
+      f <- eval function env >>= extractSingleValue
+      case f of
+        (Lambda _) -> callCC $ \k -> (`eval` env) $ (f :. Lambda k :. Null)
+        _ -> lift $ throwError $ T.pack $ "No function passed to Call/CC-- " ++ (show f)
     _ -> lift $ throwError "Wrong number of arguments for \"call/cc\""
   "get-environment" -> case args of
     Null -> return $ (Environment env :. Null)
     _ -> lift $ throwError "Incorrect number of arguments for get-environment"
   _ -> do
-    function <- eval (Symbol s) env >>= extractSingleValue
-    case function of
-      (Lambda f) -> do
-        let eval_args Null = return Null
-            eval_args p@(a :. as) = do
-              val <- eval a env >>= extractSingleValue
-              rest <- eval_args as
-              return (val :. rest)
-            eval_args _ = lift $ throwError "Error: Function not called with list"
-        args' <- eval_args args
-        f args'
-      _ -> lift $ throwError "Error: Not a function"
-eval (_ :. _) _ = lift $ throwError "Error: Not a function"
+    f <- eval (Symbol s) env >>= extractSingleValue
+    eval (f :. args) env
+eval (Lambda f :. args) env = do
+  let eval_args Null = return Null
+      eval_args p@(a :. as) = do
+        val <- eval a env >>= extractSingleValue
+        rest <- eval_args as
+        return (val :. rest)
+      eval_args _ = lift $ throwError "Function not called with list"
+  args' <- eval_args args
+  f args'
+eval (a :. _) _ = lift $ throwError $ T.pack $ "Not a function: " ++ show a
 eval x@(Quote _) _ = return (x :. Null)
 eval (Symbol s) env = do
   envs <- liftIO $ (traverse readIORef) env
