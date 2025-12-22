@@ -57,6 +57,7 @@ executable Scheme-interpreter-exe
   build-depends:
       Scheme-interpreter
     , base >=4.7 && <5
+    , containers
     , mtl
     , text
     , transformers

@@ -11,6 +11,7 @@ import Data.Foldable (for_)
 import Data.Function (fix)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
+import qualified Data.IntMap.Strict as IM
 import Control.Monad.RWS.Strict (RWST, runRWST)
 import Data.IORef
 import System.IO
@@ -18,8 +19,10 @@ import SchemeExpr
 import Evaluator
 import Parser
 
-repl :: Env -> SymbolTable -> T.Text -> IO ()
-repl env symbolTable = fix $ \loop inputBuffer -> do
+repl :: SpecialFormTable
+     -> SpecialFormTable
+     -> Env -> SymbolTable -> T.Text -> IO ()
+repl expandForms evalForms env symbolTable = fix $ \loop inputBuffer -> do
   putStr $ case T.null inputBuffer of
     True  -> "=> "
     False -> "   "
@@ -34,7 +37,7 @@ repl env symbolTable = fix $ \loop inputBuffer -> do
               vals <- eval expr env
               let writeln args = write args >> newline Null
               for_each (Lambda writeln :. vals :. Null)
-        result <- runExceptT $ evalContT $ evaluated
+        result <- runExceptT $ (`runReaderT` evalForms) $ evalContT $ evaluated
         case result of
           Left err -> putStrLn $ "Error: " ++ T.unpack err
           Right _  -> return ()
@@ -47,8 +50,8 @@ repl env symbolTable = fix $ \loop inputBuffer -> do
 
 main :: IO ()
 main = do
-  symbolTable <- newIORef 
-    (HM.fromList [("define",0), ("set!",1), ("if",2), ("lambda",3), ("quote",4), ("call/cc",5), ("get-environment",6)], 7)
+  symbolTable <- newIORef (HM.empty, 0)
+  (expandForms, evalForms) <- createSpecialForms symbolTable
   baseEnv <- createBaseEnv symbolTable
   putStrLn "Start of REPL"
-  repl baseEnv symbolTable T.empty
+  repl expandForms evalForms baseEnv symbolTable T.empty

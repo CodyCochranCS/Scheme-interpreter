@@ -2,11 +2,13 @@ module SchemeExpr
     ( Expr(..)
     , Env
     , SymbolTable
+    , SpecialFormTable(..)
     , Eval
     ) where
 
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Cont (ContT)
+import Control.Monad.Reader (ReaderT)
 import Data.IORef (IORef)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM (HashMap)
@@ -17,8 +19,10 @@ import Data.Ratio
 -- type Env = [IORef (HM.HashMap T.Text Expr)]
 type Env = [IORef (IM.IntMap Expr)]
 type SymbolTable = IORef ((HM.HashMap T.Text Int), Int)
+newtype SpecialFormTable = SpecialFormTable (IM.IntMap (Expr -> Env -> Eval Expr))
 
-type Eval a = ContT Expr (ExceptT T.Text IO) a
+-- type Eval = ContT Expr (ExceptT T.Text IO)
+type Eval = ContT Expr (ReaderT SpecialFormTable (ExceptT T.Text IO))
 -- ContT [Expr] (ExceptT T.Text IO) a
 -- (a -> IO (Either Text [Expr]))  -> IO (Either Text [Expr])
 

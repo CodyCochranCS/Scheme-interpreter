@@ -5,6 +5,7 @@
 module Evaluator
     ( eval
     , createBaseEnv
+    , createSpecialForms
     , for_each
     , write
     , newline
@@ -21,6 +22,7 @@ import Control.Monad (msum)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
 import Control.Monad.Trans.State.Strict (evalStateT, runStateT)
+import Control.Monad.Reader (ask)
 import Parser
 
 import SchemeExpr
@@ -180,14 +182,16 @@ display :: Expr -> Eval Expr
 display (expr :. Null) = recursive_write displayval expr
 display _ = throwWrongArgs
 
+assign_symbol :: SymbolTable -> (T.Text, a) -> IO (Int, a)
+assign_symbol symbolTable (str,lambda) = do
+  (table,counter) <- readIORef symbolTable
+  let newTable = HM.insert str counter table
+  writeIORef symbolTable (newTable, counter+1)
+  return (counter, lambda)
+
 createBaseEnv :: SymbolTable -> IO Env
-createBaseEnv symbolTable = do
-  let assign_symbol (str,lambda) = do
-        (table,counter) <- readIORef symbolTable
-        let newTable = HM.insert str counter table
-        writeIORef symbolTable (newTable, counter+1)
-        return (counter, lambda)
-  environment <- traverse assign_symbol 
+createBaseEnv symbolTable = do 
+  environment <- traverse (assign_symbol symbolTable)
     [("+", Lambda plus)
     ,("-", Lambda minus)
     ,("*", Lambda times)
@@ -207,7 +211,101 @@ createBaseEnv symbolTable = do
     -- ,("read", Lambda sread)
     ]
   fmap return $ newIORef $ IM.fromList $ environment
-  
+
+createSpecialForms :: SymbolTable -> IO (SpecialFormTable, SpecialFormTable)
+createSpecialForms symbolTable = do 
+  baseTable <- traverse (assign_symbol symbolTable)
+    [("define", define)
+    ,("set!", set_)
+    ,("if", if_)
+    ,("quote",quote)
+    ,("lambda",lambda_)
+    ,("call/cc", call_cc)
+    ,("get-environment", get_environment)
+    ]
+  let base_intmap = SpecialFormTable (IM.fromList baseTable)
+  return (base_intmap, base_intmap)
+
+define :: Expr -> Env -> Eval Expr
+define (Symbol (_, identifier) :. expr :. Null) env = do
+  case env of
+    (env_ref:_) -> do
+      frame <- liftIO $ readIORef env_ref
+      case IM.lookup identifier frame of
+        Just _ -> lift $ throwError $ "Defining a variable that already exists"
+        Nothing -> do
+          value <- eval expr env >>= extractSingleValue
+          mutable_value <- liftIO $ case value of
+            (_ :. _) -> listToPairs value
+            _ -> return value
+          liftIO $ modifyIORef env_ref (IM.insert identifier mutable_value)
+          return Null
+    _ -> lift $ throwError $ "No environment exists"
+define _ _ = lift $ throwError $ "Incorrect syntax for \"define\""
+
+set_ :: Expr -> Env -> Eval Expr
+set_ (Symbol (sym, identifier) :. expr :. Null) env = do
+  value <- eval expr env >>= extractSingleValue
+  mutable_value <- liftIO $ case value of
+    (_ :. _) -> listToPairs value
+    _ -> return value
+  let update_var [] = lift $ throwError $ T.pack $ "Unbound variable: " ++ show sym
+      update_var (env_ref:parent_envs) = do
+        env <- liftIO $ readIORef env_ref
+        case IM.lookup identifier env of
+          Just _ -> liftIO $ modifyIORef env_ref (IM.adjust (const mutable_value) identifier)
+          Nothing -> update_var parent_envs
+  update_var env
+  return Null
+set_ _ _ = lift $ throwError "Syntax error with \"set!\""
+
+if_ :: Expr -> Env -> Eval Expr
+if_ (test :. truebody :. falsebody :. Null) env = do
+  condition <- eval test env >>= extractSingleValue
+  case condition of
+    Bool False -> eval falsebody env
+    _          -> eval truebody env
+if_ _ _ = lift $ throwError "Syntax error with \"if\""
+
+quote :: Expr -> Env -> Eval Expr
+quote (x :. Null) _ = return $ (x :. Null)
+quote _ _ = lift $ throwError "Syntax error with \"quote\""
+
+lambda_ :: Expr -> Env -> Eval Expr
+lambda_ (params :. exprs) env = do
+  let make_new_env = liftIO . newIORef . IM.fromList
+      get_symbol (Symbol (_,n)) = n
+      get_symbol _ = -1 -- Todo: return an error if invalid symbol
+      make_new_frame = case params of
+        ps@(_ :. _) ->  let go Null Null = Just []
+                            go (p1 :. ps) (a1 :. as) = Just ((get_symbol p1, a1):) <*> go ps as
+                            go _ _ = Nothing
+                        in go ps
+        Symbol (_,p) -> (\args -> Just [(p, Quote args)])
+        _ -> const Nothing
+      f = Lambda $ \args -> case make_new_frame args of
+            Nothing -> lift $ throwError "Error: wrong arguments with lambda"
+            Just new_frame -> do
+              local_env <- make_new_env new_frame
+              let new_env = local_env:env
+                  go Null = return Null
+                  go (final_expr :. Null) = eval final_expr new_env
+                  go (e :. es) = eval e new_env >> go es
+              go exprs
+  return (f :. Null)
+lambda_ _ _ = lift $ throwError "Syntax error with \"lambda\""
+
+call_cc :: Expr -> Env -> Eval Expr
+call_cc (function :. Null) env = do
+  f <- eval function env >>= extractSingleValue
+  case f of
+    (Lambda _) -> callCC $ \k -> (`eval` env) $ (f :. Lambda k :. Null)
+    _ -> lift $ throwError $ T.pack $ "No function passed to Call/CC-- " ++ (show f)
+call_cc _ _ = lift $ throwError "Wrong number of arguments for \"call/cc\""
+
+get_environment :: Expr -> Env -> Eval Expr
+get_environment Null env = return $ (Environment env :. Null)
+get_environment _ _ = lift $ throwError "Incorrect number of arguments for get-environment"
 
 listToPairs :: Expr -> IO Expr
 listToPairs (a :. b) = do
@@ -226,88 +324,16 @@ pairsToList (Pair ref) = do
 pairsToList x = return x
 
 eval :: Expr -> Env -> Eval Expr
-eval (Symbol (s, symbolid) :. args) env = case s of
-  "define" -> case args of
-    (Symbol (_, identifier) :. expr :. Null) -> do
-      case env of
-        (env_ref:_) -> do
-          frame <- liftIO $ readIORef env_ref
-          case IM.lookup identifier frame of
-            Just _ -> lift $ throwError $ "Defining a variable that already exists"
-            Nothing -> do
-              value <- eval expr env >>= extractSingleValue
-              mutable_value <- liftIO $ case value of
-                (_ :. _) -> listToPairs value
-                _ -> return value
-              liftIO $ modifyIORef env_ref (IM.insert identifier mutable_value)
-              return Null
-        _ -> lift $ throwError $ "No environment exists"
-    _ -> lift $ throwError $ "Incorrect syntax for \"define\""
-  "set!" -> case args of
-    (Symbol (sym, identifier) :. expr :. Null) -> do
-      value <- eval expr env >>= extractSingleValue
-      mutable_value <- liftIO $ case value of
-        (_ :. _) -> listToPairs value
-        _ -> return value
-      let update_var [] = lift $ throwError $ T.pack $ "Unbound variable: " ++ show sym
-          update_var (env_ref:parent_envs) = do
-            env <- liftIO $ readIORef env_ref
-            case IM.lookup identifier env of
-              Just _ -> liftIO $ modifyIORef env_ref (IM.adjust (const mutable_value) identifier)
-              Nothing -> update_var parent_envs
-      update_var env
-      return Null
-    _ -> lift $ throwError "Syntax error with \"set!\""
-  "if" -> case args of
-    (test :. truebody :. falsebody :. Null) -> do
-      condition <- eval test env >>= extractSingleValue
-      case condition of
-        Bool False -> eval falsebody env
-        _          -> eval truebody env
-    _ -> lift $ throwError "Syntax error with \"if\""
-  "quote" -> case args of
-    -- (x :. Null) -> return $ (Quote x :. Null)
-    (x :. Null) -> return $ (x :. Null)
-    _ -> lift $ throwError "Syntax error with \"quote\""
-  "lambda" -> case args of
-    (params :. exprs) -> do
-      let make_new_env = liftIO . newIORef . IM.fromList
-          get_symbol (Symbol (_,n)) = n
-          get_symbol _ = -1 -- Todo: return an error if invalid symbol
-          make_new_frame = case params of
-            ps@(_ :. _) -> let go Null Null = Just []
-                               go (p1 :. ps) (a1 :. as) = Just ((get_symbol p1, a1):) <*> go ps as
-                               go _ _ = Nothing
-                           in go ps
-            Symbol (_,p) -> (\args -> Just [(p, Quote args)])
-            _ -> const Nothing
-          f = Lambda $ \args -> case make_new_frame args of
-                Nothing -> lift $ throwError "Error: wrong arguments with lambda"
-                Just new_frame -> do
-                  local_env <- make_new_env new_frame
-                  let new_env = local_env:env
-                      go Null = return Null
-                      go (final_expr :. Null) = eval final_expr new_env
-                      go (e :. es) = eval e new_env >> go es
-                  go exprs
-      return (f :. Null)
-    _ -> lift $ throwError "Syntax error with \"lambda\""
-  "call/cc" -> case args of
-    (function :. Null) -> do
-      f <- eval function env >>= extractSingleValue
-      case f of
-        (Lambda _) -> callCC $ \k -> (`eval` env) $ (f :. Lambda k :. Null)
-        _ -> lift $ throwError $ T.pack $ "No function passed to Call/CC-- " ++ (show f)
-    _ -> lift $ throwError "Wrong number of arguments for \"call/cc\""
-  "get-environment" -> case args of
-    Null -> return $ (Environment env :. Null)
-    _ -> lift $ throwError "Incorrect number of arguments for get-environment"
-  _ -> do
-    f <- eval (Symbol (s,symbolid)) env >>= extractSingleValue
-    eval (f :. args) env
+eval (Symbol (s, symbolid) :. args) env = do
+  SpecialFormTable formTable <- ask
+  case IM.lookup symbolid formTable of
+    Just f -> f args env
+    Nothing -> do
+      f <- eval (Symbol (s,symbolid)) env >>= extractSingleValue
+      eval (f :. args) env
 eval (Lambda f :. args) env = do
   let eval_args Null = return Null
-      eval_args p@(a :. as) = do
+      eval_args (a :. as) = do
         val <- eval a env >>= extractSingleValue
         rest <- eval_args as
         return (val :. rest)
