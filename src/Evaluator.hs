@@ -273,7 +273,7 @@ lambda_ :: Expr -> Env -> Eval Expr
 lambda_ (params :. exprs) env = do
   let make_new_env = liftIO . newIORef . IM.fromList
       get_symbol (Symbol (_,n)) = n
-      get_symbol _ = undefined -- -1 -- Todo: return an error if invalid symbol
+      get_symbol _ = -1 -- valid_symbols should mean this never gets reached
       valid_symbols Null = True
       valid_symbols (Symbol _) = True
       valid_symbols (Symbol _ :. ps) = valid_symbols ps
@@ -350,6 +350,7 @@ eval (fn@(_ :. _) :. args) env = do
   f <- eval fn env >>= extractSingleValue
   eval (f :. args) env
 eval (a :. _) _ = lift $ throwError $ T.pack $ "Not a function: " ++ show a
+eval Null _ = lift $ throwError $ "Call to null function"
 eval x@(Quote _) _ = return (x :. Null)
 eval (Symbol (s,symbolid)) env = do
   envs <- liftIO $ (traverse readIORef) env

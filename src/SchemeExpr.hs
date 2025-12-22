@@ -59,4 +59,4 @@ instance Show Expr where
                           go (a :. b) = mconcat [show a, " ", go b]
                           go end = mconcat [". ", show end, ")"]
   show (Environment _) = "<Environment>"
-  show Null = "<<<NULL>>>"
+  show Null = "()"
