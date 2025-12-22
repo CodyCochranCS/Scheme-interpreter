@@ -22,6 +22,7 @@ import Control.Monad (msum)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
 import Control.Monad.Trans.State.Strict (evalStateT, runStateT)
+import Control.Monad.RWS.Strict (runRWST)
 import Control.Monad.Reader (ask)
 import Parser
 
@@ -115,24 +116,6 @@ for_each (Lambda f :. lst :. Null) = do
     _ -> lift $ throwError "Unexpected end of list in for-each"
 for_each _ = throwWrongArgs
 
-{-
-sread :: Expr -> Eval Expr
-sread Null = sread' T.empty
-  where sread' :: T.Text -> Eval Expr
-        sread' inputBuffer = do
-          input <- liftIO getLine
-          let accumulatedInput = T.append inputBuffer $ T.pack (input ++ "\n")
-          result <- liftIO $ runPromptResultT $ runStateT p_expr accumulatedInput
-          case result of
-            Success (expr, remaining) -> case expr of
-                (_ :. _) -> return (Quote expr :. Null)
-                _ -> return (expr :. Null)
-            Failure msg -> do
-              liftIO $ putStrLn $ "Parser Error: " ++ msg
-              return Null
-            Incomplete -> sread' accumulatedInput
-sread _ = throwWrongArgs
--}
 
 recursive_write :: (Expr -> String) -> Expr -> Eval Expr
 recursive_write style expr = case expr of
@@ -191,6 +174,21 @@ assign_symbol symbolTable (str,lambda) = do
 
 createBaseEnv :: SymbolTable -> IO Env
 createBaseEnv symbolTable = do 
+  let sread :: Expr -> Eval Expr
+      sread Null = sread' T.empty
+        where sread' :: T.Text -> Eval Expr
+              sread' inputBuffer = do
+                input <- liftIO getLine
+                let accumulatedInput = T.append inputBuffer $ T.pack (input ++ "\n")
+                result <- liftIO $ runPromptResultT $ runRWST p_expr symbolTable accumulatedInput
+                case result of
+                  Success (expr, remaining, ()) -> return (expr :. Null)
+                  Failure msg -> do
+                    liftIO $ putStrLn $ "Parser Error: " ++ msg
+                    return Null
+                  Incomplete -> sread' accumulatedInput
+      sread _ = throwWrongArgs
+
   environment <- traverse (assign_symbol symbolTable)
     [("+", Lambda plus)
     ,("-", Lambda minus)
@@ -208,7 +206,7 @@ createBaseEnv symbolTable = do
     ,("apply", Lambda apply)
     ,("eval", Lambda eval')
     ,("write", Lambda write)
-    -- ,("read", Lambda sread)
+    ,("read", Lambda sread)
     ]
   fmap return $ newIORef $ IM.fromList $ environment
 
@@ -277,11 +275,12 @@ lambda_ (params :. exprs) env = do
       get_symbol (Symbol (_,n)) = n
       get_symbol _ = -1 -- Todo: return an error if invalid symbol
       make_new_frame = case params of
-        ps@(_ :. _) ->  let go Null Null = Just []
-                            go (p1 :. ps) (a1 :. as) = Just ((get_symbol p1, a1):) <*> go ps as
-                            go _ _ = Nothing
-                        in go ps
-        Symbol (_,p) -> (\args -> Just [(p, Quote args)])
+        Symbol (_,p) -> (\args -> Just [(p, args)])
+        ps -> let go Null Null = Just []
+                  go (p1 :. ps) (a1 :. as) = Just ((get_symbol p1, a1):) <*> go ps as
+                  go rest (a1 :. as) = Just [(get_symbol rest, (a1 :. as))]
+                  go _ _ = Nothing
+              in go ps
         _ -> const Nothing
       f = Lambda $ \args -> case make_new_frame args of
             Nothing -> lift $ throwError "Error: wrong arguments with lambda"
