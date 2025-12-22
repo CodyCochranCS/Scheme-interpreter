@@ -273,25 +273,32 @@ lambda_ :: Expr -> Env -> Eval Expr
 lambda_ (params :. exprs) env = do
   let make_new_env = liftIO . newIORef . IM.fromList
       get_symbol (Symbol (_,n)) = n
-      get_symbol _ = -1 -- Todo: return an error if invalid symbol
-      make_new_frame = case params of
-        Symbol (_,p) -> (\args -> Just [(p, args)])
-        ps -> let go Null Null = Just []
-                  go (p1 :. ps) (a1 :. as) = Just ((get_symbol p1, a1):) <*> go ps as
-                  go rest (a1 :. as) = Just [(get_symbol rest, (a1 :. as))]
-                  go _ _ = Nothing
-              in go ps
-        _ -> const Nothing
-      f = Lambda $ \args -> case make_new_frame args of
-            Nothing -> lift $ throwError "Error: wrong arguments with lambda"
-            Just new_frame -> do
-              local_env <- make_new_env new_frame
-              let new_env = local_env:env
-                  go Null = return Null
-                  go (final_expr :. Null) = eval final_expr new_env
-                  go (e :. es) = eval e new_env >> go es
-              go exprs
-  return (f :. Null)
+      get_symbol _ = undefined -- -1 -- Todo: return an error if invalid symbol
+      valid_symbols Null = True
+      valid_symbols (Symbol _) = True
+      valid_symbols (Symbol _ :. ps) = valid_symbols ps
+      valid_symbols _ = False
+  if valid_symbols params then do
+    let make_new_frame = case params of
+          Symbol (_,p) -> (\args -> Just [(p, args)])
+          ps -> let go Null Null = Just []
+                    go (p1 :. ps) (a1 :. as) = Just ((get_symbol p1, a1):) <*> go ps as
+                    go rest (a1 :. as) = Just [(get_symbol rest, (a1 :. as))]
+                    go _ _ = Nothing
+                in go ps
+          _ -> const Nothing
+        f = Lambda $ \args -> case make_new_frame args of
+              Nothing -> lift $ throwError "Error: wrong arguments with lambda"
+              Just new_frame -> do
+                local_env <- make_new_env new_frame
+                let new_env = local_env:env
+                    go Null = return Null
+                    go (final_expr :. Null) = eval final_expr new_env
+                    go (e :. es) = eval e new_env >> go es
+                go exprs
+    return (f :. Null)
+  else
+    lift $ throwError "Non-symbol parameters in lambda definition"
 lambda_ _ _ = lift $ throwError "Syntax error with \"lambda\""
 
 call_cc :: Expr -> Env -> Eval Expr
@@ -339,6 +346,9 @@ eval (Lambda f :. args) env = do
       eval_args _ = lift $ throwError "Function not called with list"
   args' <- eval_args args
   f args'
+eval (fn@(_ :. _) :. args) env = do
+  f <- eval fn env >>= extractSingleValue
+  eval (f :. args) env
 eval (a :. _) _ = lift $ throwError $ T.pack $ "Not a function: " ++ show a
 eval x@(Quote _) _ = return (x :. Null)
 eval (Symbol (s,symbolid)) env = do
