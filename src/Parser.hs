@@ -6,6 +6,7 @@
 module Parser
     ( p_exprs
     , p_expr
+    , assign_symbol
     , PromptResult(..)
     , PromptResultT(..)
     ) where
@@ -99,6 +100,13 @@ instance MonadIO (PromptResultT IO) where
     liftIO = lift . liftIO
 
 type Parser = RWST SymbolTable () T.Text (PromptResultT IO)
+
+assign_symbol :: SymbolTable -> (T.Text, a) -> IO (Int, a)
+assign_symbol symbolTable (str,lambda) = do
+  (table,counter) <- readIORef symbolTable
+  let newTable = HM.insert str counter table
+  writeIORef symbolTable (newTable, counter+1)
+  return (counter, lambda)
 
 throwParseError :: String -> Parser a
 throwParseError err = lift $ PromptResultT $ return $ Failure err

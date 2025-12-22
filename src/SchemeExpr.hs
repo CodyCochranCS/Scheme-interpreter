@@ -12,19 +12,15 @@ import Control.Monad.Reader (ReaderT)
 import Data.IORef (IORef)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM (HashMap)
-import qualified Data.IntMap.Strict as IM
+import qualified Data.IntMap.Strict as IM (IntMap)
 import Data.Complex
 import Data.Ratio
 
--- type Env = [IORef (HM.HashMap T.Text Expr)]
 type Env = [IORef (IM.IntMap Expr)]
 type SymbolTable = IORef ((HM.HashMap T.Text Int), Int)
-newtype SpecialFormTable = SpecialFormTable (IM.IntMap (Expr -> Env -> Eval Expr))
 
--- type Eval = ContT Expr (ExceptT T.Text IO)
 type Eval = ContT Expr (ReaderT SpecialFormTable (ExceptT T.Text IO))
--- ContT [Expr] (ExceptT T.Text IO) a
--- (a -> IO (Either Text [Expr]))  -> IO (Either Text [Expr])
+newtype SpecialFormTable = SpecialFormTable (IM.IntMap (Expr -> Env -> Eval Expr))
 
 infixr 5 :.
 
@@ -39,7 +35,7 @@ data Expr = Integer Integer
           | Expr :. Expr
           | Pair (IORef (Expr, Expr))
           | Null
-          | Quote Expr
+          -- | Quote Expr
           | Lambda (Expr -> Eval Expr)
           | Environment Env
 
@@ -52,7 +48,7 @@ instance Show Expr where
   show (Char c) = "#\\" ++ [c]
   show (String s) = show s
   show (Symbol (s,_)) = T.unpack s
-  show (Quote e) = "'" ++ show e
+  -- show (Quote e) = "'" ++ show e
   show (Lambda _) = "<Lambda_function>"
   show p@(_ :. _) = "(" ++ go p
                     where go (a :. Null) = mconcat [show a, ")"]

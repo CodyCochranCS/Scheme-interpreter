@@ -1,26 +1,26 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
 
 module Main (main) where
 
-import Control.Monad.Trans.State.Strict (evalStateT, runStateT)
 import Control.Monad.Reader (runReaderT)
 import Control.Monad.Cont (evalContT)
 import Control.Monad.Except (runExceptT)
-import Control.Monad (forever)
 import Data.Foldable (for_)
 import Data.Function (fix)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
-import qualified Data.IntMap.Strict as IM
-import Control.Monad.RWS.Strict (RWST, runRWST)
-import Data.IORef
-import System.IO
+import Control.Monad.RWS.Strict (runRWST)
+import Data.IORef (newIORef)
+import System.IO (hFlush, stdout)
+
 import SchemeExpr
 import Evaluator
 import Parser
+import BaseLib
+import SpecialForms
 
-repl :: SpecialFormTable
-     -> SpecialFormTable
+repl :: SpecialFormTable -> SpecialFormTable
      -> Env -> SymbolTable -> T.Text -> IO ()
 repl expandForms evalForms env symbolTable = fix $ \loop inputBuffer -> do
   putStr $ case T.null inputBuffer of
@@ -31,7 +31,7 @@ repl expandForms evalForms env symbolTable = fix $ \loop inputBuffer -> do
   let accumulatedInput = T.append inputBuffer $ T.pack (input ++ "\n")
   result <- runPromptResultT $ runRWST p_exprs symbolTable accumulatedInput
   case result of
-    Success (exprs, remaining, ()) -> do
+    Success (exprs, _, _) -> do
       for_ exprs $ \expr -> do
         let evaluated = do
               vals <- eval expr env

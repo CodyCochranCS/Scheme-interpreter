@@ -25,9 +25,11 @@ source-repository head
 
 library
   exposed-modules:
+      BaseLib
       Evaluator
       Parser
       SchemeExpr
+      SpecialForms
   other-modules:
       Paths_Scheme_interpreter
   autogen-modules:
