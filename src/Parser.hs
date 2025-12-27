@@ -258,9 +258,11 @@ p_integer = do
 
 p_symbol :: Parser Expr
 p_symbol = do
-  t <- p_initial
-  ts <- many p_subsequent
-  let symbol = T.pack (t:ts)
+  parsed <- allOf "..."
+            <|> do t <- p_initial
+                   ts <- many p_subsequent
+                   return (t:ts)
+  let symbol = T.pack parsed
   ref <- ask
   (symbolTable, counter) <- liftIO $ readIORef ref
   case HM.lookup symbol symbolTable of

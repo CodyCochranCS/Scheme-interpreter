@@ -13,6 +13,7 @@ import Data.IORef (IORef)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM (HashMap)
 import qualified Data.IntMap.Strict as IM (IntMap)
+import Data.Sequence (Seq)
 import Data.Complex
 import Data.Ratio
 
@@ -35,9 +36,23 @@ data Expr = Integer Integer
           | Expr :. Expr
           | Pair (IORef (Expr, Expr))
           | Null
-          -- | Quote Expr
           | Lambda (Expr -> Eval Expr)
           | Environment Env
+          | Pattern (Seq Expr)
+
+instance Eq Expr where
+  (Integer x) == (Integer y)   = x == y
+  (Fraction x) == (Fraction y) = x == y
+  (Complex x) == (Complex y)   = x == y
+  (Float x) == (Float y)       = x == y
+  (Bool x) == (Bool y)         = x == y
+  (Char x) == (Char y)         = x == y
+  (String x) == (String y)     = x == y
+  (Symbol (_,x)) == (Symbol (_,y)) = x == y
+  (a :. as) == (b :. bs)      = (a == b) && (as == bs)
+  (Pair x) == (Pair y)        = x == y -- Note: checks for pointer equality, not deep comparison
+  Null == Null                = True
+  _ == _                      = False
 
 instance Show Expr where
   show (Integer x) = show x
@@ -48,7 +63,6 @@ instance Show Expr where
   show (Char c) = "#\\" ++ [c]
   show (String s) = show s
   show (Symbol (s,_)) = T.unpack s
-  -- show (Quote e) = "'" ++ show e
   show (Lambda _) = "<Lambda_function>"
   show p@(_ :. _) = "(" ++ go p
                     where go (a :. Null) = mconcat [show a, ")"]
@@ -56,3 +70,5 @@ instance Show Expr where
                           go end = mconcat [". ", show end, ")"]
   show (Environment _) = "<Environment>"
   show Null = "()"
+  show (Pattern _) = "<Pattern>"
+  
