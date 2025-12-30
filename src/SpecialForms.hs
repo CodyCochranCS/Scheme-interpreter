@@ -158,7 +158,7 @@ syntax_case (stx :. literals :. patterns) envs = do
           case IM.lookup n dict of
             Nothing          -> Just $ IM.insert n (Pattern $ singleton x) dict
             Just (Pattern p) -> Just $ IM.adjust (const $ Pattern $ p |> x) n dict
-      try_pattern dict expr@(p :. Symbol ("...", _) :. rest) (e :. es) = 
+      try_pattern dict expr@(p :. Ellipsis :. rest) (e :. es) = 
         case try_pattern dict p e of
           Just dict' -> try_pattern dict'  expr es
           Nothing    -> try_pattern dict rest (e :. es)

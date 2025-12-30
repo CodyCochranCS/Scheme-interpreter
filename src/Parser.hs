@@ -256,12 +256,16 @@ p_integer = do
     Just '-'  -> -1
     otherwise ->  1
 
+p_ellipsis :: Parser Expr
+p_ellipsis = do
+  allOf "..."
+  return Ellipsis
+
 p_symbol :: Parser Expr
 p_symbol = do
-  parsed <- allOf "..."
-            <|> do t <- p_initial
-                   ts <- many p_subsequent
-                   return (t:ts)
+  parsed <- do t <- p_initial
+               ts <- many p_subsequent
+               return (t:ts)
   let symbol = T.pack parsed
   ref <- ask
   (symbolTable, counter) <- liftIO $ readIORef ref
@@ -297,7 +301,7 @@ p_quote = do
 p_expr :: Parser Expr
 p_expr = do
   many p_whitespace
-  result <- p_list <|> p_integer <|> p_string <|> p_quote <|> p_symbol
+  result <- p_ellipsis <|> p_list <|> p_integer <|> p_string <|> p_quote <|> p_symbol
   many p_whitespace
   return result
 

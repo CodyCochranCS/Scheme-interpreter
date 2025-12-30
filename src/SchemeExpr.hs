@@ -39,6 +39,7 @@ data Expr = Integer Integer
           | Lambda (Expr -> Eval Expr)
           | Environment Env
           | Pattern (Seq Expr)
+          | Ellipsis
 
 instance Eq Expr where
   (Integer x) == (Integer y)   = x == y
